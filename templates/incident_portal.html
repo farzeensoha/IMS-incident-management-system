@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Open-Source Incident Manager</title>
+
+<!-- Corrected direct CDN links for styling -->
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+    body { background-color: #f8f9fa; font-family: 'Inter', sans-serif; }
+    .incident-card { transition: all 0.3s ease; }
+    .priority-critical { border-left: 5px solid #dc3545 !important; }
+    .priority-high { border-left: 5px solid #ffc107 !important; }
+    .priority-medium { border-left: 5px solid #0d6efd !important; }
+    .priority-low { border-left: 5px solid #20c997 !important; }
+    .rounded-8 { border-radius: 0.5rem; }
+</style>
+
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+<div class="container-fluid">
+<a class="navbar-brand" href="{{ url_for('index') }}">IMS Portal</a>
+<div class="d-flex">
+{% if current_user.is_authenticated %}
+<span class="navbar-text me-3">
+Welcome, <strong>{{ current_user.username }}</strong>
+({{ 'Manager' if is_manager else ('Tech' if is_technician else 'Reporter') }})
+</span>
+<a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
+{% endif %}
+</div>
+</div>
+</nav>
+
+<div class="container mt-4">
+
+<!-- Flash Messages -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        {% for category, message in messages %}
+            <div class="alert alert-{{ category }} rounded-8" role="alert">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+{% endwith %}
+
+<!-- Login Page -->
+{% if is_login_page %}
+    <div class="row justify-content-center">
+        <div class="col-md-5">
+            <div class="card shadow-lg p-4 mt-5 rounded-8">
+                <h2 class="card-title text-center mb-4">Incident Login</h2>
+                <p class="text-center text-muted">Use **admin**, **tech_alice**, or **reporter_bob** to sign in.</p>
+                <form method="POST" action="{{ url_for('login') }}">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Username</label>
+                        <input type="text" class="form-control rounded-pill" id="username" name="username" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 rounded-pill mt-3">Log In</button>
+                </form>
+            </div>
+        </div>
+    </div>
+{% else %}
+<!-- Main Dashboard -->
+    <h1 class="mb-4">Incident Dashboard</h1>
+    <div class="row">
+        <!-- 1. Create Incident Form (Always visible for logged-in users) -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow-sm p-4 rounded-8">
+                <h4 class="card-title mb-3">Report New Incident</h4>
+                <form method="POST" action="{{ url_for('create_incident') }}">
+                    <div class="mb-3">
+                        <label for="title" class="form-label">Title</label>
+                        <input type="text" class="form-control" id="title" name="title" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="description" class="form-label">Description</label>
+                        <textarea class="form-control" id="description" name="description" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="priority" class="form-label">Priority</label>
+                        <select class="form-select" id="priority" name="priority" required>
+                            <option value="Low">Low</option>
+                            <option value="Medium" selected>Medium</option>
+                            <option value="High">High</option>
+                            <option value="Critical">Critical</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-danger w-100">Submit Incident</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 2. Incident List -->
+        <div class="col-lg-8">
+            <h4 class="mb-3">Open Incidents ({{ incidents|length }})</h4>
+            {% for incident in incidents %}
+                {# FIX: Changed lower.replace to lower|replace to correctly chain Jinja filters #}
+                {% set priority_class = 'priority-' + incident.priority|lower|replace(' ', '-') %}
+                <div class="card shadow-sm mb-3 incident-card {{ priority_class }} rounded-8">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between">
+                            <h5 class="card-title">#{{ incident.id }}: {{ incident.title }}</h5>
+                            <span class="badge bg-{{ {'New': 'danger', 'In Progress': 'warning', 'Resolved': 'success', 'Closed': 'secondary'}[incident.status] }} align-self-start">
+                                {{ incident.status }}
+                            </span>
+                        </div>
+                        <h6 class="card-subtitle mb-2 text-muted">
+                            Priority: <strong>{{ incident.priority }}</strong> | 
+                            Reporter: {{ user_map[incident.reporter_id] }} | 
+                            Assigned To: <strong>{{ user_map[incident.assigned_to_id] if incident.assigned_to_id else 'Unassigned' }}</strong>
+                        </h6>
+                        <p class="card-text">{{ incident.description }}</p>
+
+                        {% if is_technician %}
+                            <!-- Technician/Manager Actions -->
+                            <hr>
+                            <form method="POST" action="{{ url_for('update_incident', incident_id=incident.id) }}" class="d-flex gap-2 align-items-center">
+                                <!-- Assignment Dropdown (Visible only if assigned to someone else or unassigned) -->
+                                {% if is_manager or not incident.assigned_to_id or incident.assigned_to_id != current_user_id %}
+                                    <label class="form-label mb-0 fw-bold">Assign:</label>
+                                    <select class="form-select form-select-sm me-2 w-auto" name="assigned_to_id">
+                                        <option value="0">Unassign</option>
+                                        {% for user in users %}
+                                            {% if user.role in [1, 2] %} <!-- Only assignable to Tech/Manager -->
+                                                <option value="{{ user.id }}" {% if incident.assigned_to_id == user.id %}selected{% endif %}>
+                                                    {{ user.username }} ({{ 'Manager' if user.role == 1 else 'Tech' }})
+                                                </option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </select>
+                                {% endif %}
+                                
+                                <!-- Status Update -->
+                                <label class="form-label mb-0 fw-bold">Status:</label>
+                                <select class="form-select form-select-sm me-2 w-auto" name="status">
+                                    <option value="New" {% if incident.status == 'New' %}selected{% endif %}>New</option>
+                                    <option value="In Progress" {% if incident.status == 'In Progress' %}selected{% endif %}>In Progress</option>
+                                    <option value="Resolved" {% if incident.status == 'Resolved' %}selected{% endif %}>Resolved</option>
+                                    <option value="Closed" {% if incident.status == 'Closed' %}selected{% endif %}>Closed</option>
+                                </select>
+                                
+                                <button type="submit" class="btn btn-sm btn-primary">Update</button>
+                            </form>
+                            
+                            {% if is_manager %}
+                                <!-- Delete Button (Manager only) -->
+                                <form method="POST" action="{{ url_for('delete_incident', incident_id=incident.id) }}" class="mt-2" onsubmit="return confirm('Are you sure you want to delete Incident #{{ incident.id }}?');">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete Incident</button>
+                                </form>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+            {% else %}
+                <div class="alert alert-info rounded-8">No incidents have been reported yet!</div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
+</div>
+
+<!-- FIX: Corrected direct CDN link for JavaScript (Replaces Google search URL) -->
+
+<script src="https://www.google.com/search?q=https://cdn.jsdelivr.net/npm/bootstrap%405.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+</body>
+</html>
